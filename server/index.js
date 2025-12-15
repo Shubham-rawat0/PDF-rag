@@ -50,7 +50,7 @@ app.post("/upload/pdf", upload.single("pdf"), async (req, res) => {
 });
 
 app.get("/chat",async (req,res)=>{
-    const userQuery=req.params.message
+    const userQuery=req.query.message
     
      const embeddings = new OpenAIEmbeddings({
        apiKey: process.env.API_KEY,
@@ -83,7 +83,7 @@ app.get("/chat",async (req,res)=>{
 
 
     const chatResult = await client.chat.completions.create({
-      model: "gpt-4.1",
+      model: "gpt-3.5-turbo",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: userQuery },
