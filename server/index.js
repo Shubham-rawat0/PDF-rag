@@ -4,7 +4,13 @@ import multer from "multer";
 import fs from "fs";
 import { Queue } from "bullmq";
 import { QdrantVectorStore } from "@langchain/qdrant";
-import { OllamaEmbeddings, Ollama } from "@langchain/ollama";
+import { OpenAIEmbeddings } from "@langchain/openai";
+import OpenAI from "openai";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const client = new OpenAI({ apiKey: process.env.API_KEY });
 
 const queue = new Queue("file-upload-queue", {
   connection: {
@@ -45,67 +51,50 @@ app.post("/upload/pdf", upload.single("pdf"), async (req, res) => {
 });
 
 app.get("/chat", async (req, res) => {
-  try {
-    const userQuery = req.query.message;
+  const userQuery = req.query.message;
 
-    if (!userQuery) {
-      return res.status(400).json({ message: "Query is required" });
+  const embeddings = new OpenAIEmbeddings({
+    apiKey: process.env.API_KEY,
+    model: "text-embedding-3-small",
+  });
+
+  const vectorStore = await QdrantVectorStore.fromExistingCollection(
+    embeddings,
+    {
+      url: "http://localhost:6333",
+      collectionName: "langchainjs-testing",
     }
+  );
 
-    const embeddings = new OllamaEmbeddings({
-      model: "nomic-embed-text",
-      baseUrl: "http://localhost:11434",
-    });
+  const ret = vectorStore.asRetriever({
+    k: 2,
+  });
+  const result = await ret.invoke(userQuery);
 
-    const vectorStore = await QdrantVectorStore.fromExistingCollection(
-      embeddings,
-      {
-        url: "http://localhost:6333",
-        collectionName: "langchainjs-testing",
-      }
-    );
+  const context = result.map((d) => d.pageContent).join("\n\n");
 
-    const retriever = vectorStore.asRetriever({ k: 3 });
-    
-    const result = await retriever.invoke(userQuery);
+  const SYSTEM_PROMPT = `
+    You are a helpful assistant.
+    Answer ONLY from the context below.
+    If not found, say "Not found in document".
 
-    if (result.length === 0) {
-      return res.json({
-        message: "Not found in document",
-        docs: [],
-      });
-    }
+    Context:
+    ${context}
+    `;
 
-    const context = result.map((d) => d.pageContent).join("\n\n");
-
-    const llm = new Ollama({
-      model: "phi3",
-      baseUrl: "http://localhost:11434",
-      temperature: 0.2,
-    });
-
-    const answer = await llm.invoke(`
-You are a helpful assistant.
-Answer ONLY from the context below.
-If not found, say "Not found in document".
-
-Context:
-${context}
-
-Question:
-${userQuery}
-`);
-
-    return res.json({
-      message: answer,
-      docs: result,
-    });
-  } catch (err) {
-    console.error("Chat error:", err);
-    res.status(500).json({ message: "Internal server error" });
-  }
+  const chatResult = await client.chat.completions.create({
+    model: "gpt-3.5-turbo",
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: userQuery },
+    ],
+  });
+  return res.json({
+    message: chatResult.choices[0].message.content,
+    docs: result,
+  });
 });
 
 app.listen(8000, () => {
-  console.log("server on 8000");
+  console.log("server running on 8000");
 });
